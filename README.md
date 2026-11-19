@@ -273,6 +273,8 @@ demo/           Demo API and the synthetic fixture generator
 scripts/        Setup, verification and demo entry points
 docs/           Architecture, deployment, demo and progress
 compose.yaml    The local stack
+render.yaml     The Render Blueprint for the cloud deployment
+deploy/         The combined image used by the free-tier cloud deployment
 ```
 
 ---
@@ -284,6 +286,31 @@ compose.yaml    The local stack
 | [docs/architecture.md](docs/architecture.md) | Services, data model, rule semantics, configuration, data handling |
 | [docs/deployment.md](docs/deployment.md) | HTTPS, environment variables, managed database, migrations, health and smoke checks |
 | [docs/implementation-status.md](docs/implementation-status.md) | Milestones and the actual result of every verification command |
+
+---
+
+## Cloud deployment
+
+The release is deployed to **Render** with a managed PostgreSQL 16 database
+(Neon). `render.yaml` is the Blueprint and `deploy/` holds the combined image
+that the free tier needs.
+
+```sh
+# 1. Push the repository to GitHub
+git push -u origin main
+
+# 2. In the Render dashboard: New -> Blueprint -> select the repository
+#    Render asks for SENTINEL_DATABASE_URL and SENTINEL_SECRET_KEY
+
+# 3. Verify the live deployment
+python3 scripts/smoke.py \
+  --base-url https://<service>.onrender.com \
+  --core-url https://<service>.onrender.com \
+  --ingest-url https://<service>.onrender.com
+```
+
+The step-by-step guide, the environment variables and the free-tier
+limitations are in [docs/deployment.md](docs/deployment.md#0-render-the-deployment-used-for-this-release).
 
 ---
 

@@ -11,6 +11,96 @@ migrations, the health checks and the smoke check after the rollout.
 
 ---
 
+## 0. Render (the deployment used for this release)
+
+This is the concrete, verified path. Render's free tier has no background
+worker, no private services and no one-off jobs, so the four runtimes share a
+single web-service container as four separate OS processes:
+
+| Process | Role | Port inside the container |
+|---|---|---|
+| `uvicorn sentinel.core.app` | Core API | 8000 |
+| `uvicorn sentinel.ingest.app` | Ingestion API | 8001 |
+| `python -m sentinel.detector.worker` | Detection worker | none |
+| `nginx` | The SPA and the same-origin proxy | `$PORT` |
+
+The migration runs first, so the schema owner stays unique:
+`alembic upgrade head` is idempotent and a restart is safe.
+
+The browser, the Core API and the Ingestion API share one origin: the nginx
+process terminates TLS (Render does that in front of the container), serves the
+SPA and proxies `/api/`, `/ingest/` and `/health/` to the two API processes on
+the loopback interface.
+
+> The Docker Compose stack in `compose.yaml` keeps the runtimes in separate
+> containers and remains the reference deployment shape. The combined image
+> exists only because the free tier cannot host a background worker.
+
+### 0.1 Files
+
+| File | Purpose |
+|---|---|
+| `render.yaml` | The Render Blueprint: one web service and its environment |
+| `deploy/Dockerfile.render` | The combined image (Node build stage, Python runtime) |
+| `deploy/entrypoint.sh` | Starts the four runtimes and stops them cleanly |
+| `frontend/nginx.conf.template` | The nginx configuration, rendered at start |
+| `frontend/render-nginx-config.sh` | Renders the template with the environment |
+
+### 0.2 Database
+
+Use [Neon](https://neon.tech) (free, no expiry) or a Render Postgres instance.
+
+1. Create a project and a PostgreSQL 16 database.
+2. Copy the **pooled** connection string. It looks like
+   `postgresql://USER:PASSWORD@HOST/DATABASE?sslmode=require`.
+3. Convert the driver to the SQLAlchemy psycopg driver:
+   `postgresql+psycopg://USER:PASSWORD@HOST/DATABASE?sslmode=require`.
+   The application reads `SENTINEL_DATABASE_URL`.
+
+### 0.3 Deploy
+
+1. Push the repository to GitHub. The Blueprint reads `render.yaml` from the
+   repository root.
+2. In the Render dashboard choose **New → Blueprint**, select the repository
+   and confirm the blueprint path `render.yaml`.
+3. Render asks for the two secret values:
+   - `SENTINEL_DATABASE_URL` — the Neon connection string from step 0.2
+   - `SENTINEL_SECRET_KEY` — generate it with
+     `python3 -c "import secrets; print(secrets.token_urlsafe(48))"`
+4. Render creates the service and starts the build. The first build installs
+   the pinned Python dependencies and builds the SPA.
+5. When the deploy succeeds, open the service URL. The browser must reach the
+   SPA and the API on the same host.
+
+### 0.4 Verify the live deployment
+
+```sh
+python3 scripts/smoke.py \
+  --base-url https://sentinel-web.onrender.com \
+  --core-url https://sentinel-web.onrender.com \
+  --ingest-url https://sentinel-web.onrender.com
+```
+
+The script verifies the browser URL, the Core and Ingest health paths and the
+freshness of the detector heartbeat. It exits non-zero when a check fails.
+
+Then open the site, create the first account through the sign-up form and
+check the Overview page.
+
+### 0.5 Free-tier limitations to expect
+
+| Limitation | Effect |
+|---|---|
+| The service spins down after 15 minutes of inactivity | The first request after a quiet period waits for a cold start (about a minute) |
+| The Neon free tier has an idle autoscale | The database pauses when unused and resumes on the next query |
+| 750 free instance hours per month | The service is suspended when the monthly allowance is used up |
+| One instance | No horizontal scaling |
+
+A paid plan removes the spin-down and the autoscale pauses. The blueprint does
+not need any change for it.
+
+---
+
 ## 1. Target shape
 
 | Component | Recommendation |
@@ -55,10 +145,13 @@ The proxy must also forward the scheme correctly, because the same-origin
 check compares the `Origin` header with the `Host` header:
 
 ```nginx
-proxy_set_header Host $host;
+proxy_set_header Host $http_host;
 proxy_set_header X-Forwarded-Proto $scheme;
 proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 ```
+
+`$http_host` keeps the port; `$host` would drop it and the same-origin check
+would then reject every state-changing browser request.
 
 Limit the request body size at the proxy **and** at the service boundary. The
 Core API rejects bodies over 64 KiB and the Ingestion API over 32 KiB before
@@ -74,6 +167,8 @@ parsing them.
 | `SENTINEL_SECRET_KEY` | yes | a long random value | Application secret. Rotate it together with a session purge. |
 | `SENTINEL_APP_ENV` | yes | `production` | Enables the production behaviour (no API docs, secure cookies) |
 | `SENTINEL_SECURE_COOKIES` | yes | `true` | Adds `Secure` to the session cookies |
+| `CORE_UPSTREAM` | no | `http://127.0.0.1:8000` | The Core API base URL used by the nginx proxy |
+| `INGEST_UPSTREAM` | no | `http://127.0.0.1:8001` | The Ingestion API base URL used by the nginx proxy |
 | `SENTINEL_SESSION_TTL_SECONDS` | no | `604800` | Session lifetime |
 | `SENTINEL_LOGIN_RATE_LIMIT_PER_MINUTE` | no | `10` | Login attempts per client per minute |
 | `SENTINEL_INGESTION_RATE_LIMIT_PER_MINUTE` | no | `600` | Events per source per minute |
@@ -134,6 +229,11 @@ outdated schema.
 Alembic reads the database URL from `SENTINEL_DATABASE_URL`, so the migration
 job and the services must use the same value.
 
+On a platform without one-off jobs (Render's free tier), the migration runs as
+the first step of the container entrypoint. `alembic upgrade head` is
+idempotent, so a restart or a redeploy re-runs it safely without duplicating
+a revision.
+
 ---
 
 ## 6. Container images
@@ -144,11 +244,14 @@ Only the first two are deployed:
 ```sh
 docker build -t registry.example.com/sentinel/core:1.0.0 ./backend
 docker build -t registry.example.com/sentinel/web:1.0.0 ./frontend
+docker build -f deploy/Dockerfile.render -t registry.example.com/sentinel/all:1.0.0 .
 ```
 
 The `web` image is a multi-stage build: Node 22 builds the SPA and nginx
 serves the result. The `backend` image is `python:3.12-slim` with the pinned
-dependencies from `backend/pyproject.toml`.
+dependencies from `backend/pyproject.toml`. The third image combines both
+runtimes plus the detection worker for a platform without a background
+worker.
 
 Pin the image tags to a release. Do not use `latest` in production.
 
