@@ -13,10 +13,9 @@ from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from sentinel.common.models import Base
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
-
-from sentinel.common.models import Base
 
 TEST_DATABASE_URL = os.environ.get("SENTINEL_TEST_DATABASE_URL")
 
@@ -55,9 +54,13 @@ def clean_db(engine) -> Iterator[Session]:
     """A session on a database truncated between tests."""
     factory = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
     with engine.begin() as connection:
-        connection.execute(text("TRUNCATE TABLE alerts, alert_evidence, alert_comments, "
-                               "alert_history, detector_jobs, security_events, api_sources, "
-                               "memberships, workspaces, sessions, users RESTART IDENTITY CASCADE"))
+        connection.execute(
+            text(
+                "TRUNCATE TABLE alerts, alert_evidence, alert_comments, "
+                "alert_history, detector_jobs, security_events, api_sources, "
+                "memberships, workspaces, sessions, users RESTART IDENTITY CASCADE"
+            )
+        )
     session = factory()
     try:
         yield session

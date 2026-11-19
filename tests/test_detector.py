@@ -10,8 +10,6 @@ import uuid
 from datetime import timedelta
 
 import pytest
-from sqlalchemy import select
-
 from sentinel.common.models import (
     Alert,
     AlertEvidence,
@@ -19,6 +17,7 @@ from sentinel.common.models import (
     SecurityEvent,
 )
 from sentinel.detector.worker import Detector
+from sqlalchemy import select
 
 
 @pytest.fixture
@@ -89,9 +88,7 @@ def _run_detector(clean_db, monkeypatch) -> None:
     detector.run_once()
 
 
-def test_a_crossing_creates_an_alert_with_evidence(
-    clean_db, detector_source, monkeypatch
-) -> None:
+def test_a_crossing_creates_an_alert_with_evidence(clean_db, detector_source, monkeypatch) -> None:
     from sentinel.common.clock import utcnow
 
     base = utcnow()
@@ -117,9 +114,11 @@ def test_a_crossing_creates_an_alert_with_evidence(
     assert alert.status == "new"
     assert str(alert.source_ip) == "203.0.113.10"
 
-    evidence = clean_db.execute(
-        select(AlertEvidence).where(AlertEvidence.alert_id == alert.id)
-    ).scalars().all()
+    evidence = (
+        clean_db.execute(select(AlertEvidence).where(AlertEvidence.alert_id == alert.id))
+        .scalars()
+        .all()
+    )
     assert len(evidence) == 5
 
 
@@ -297,9 +296,7 @@ def test_the_worker_writes_a_heartbeat(clean_db, detector_source, monkeypatch) -
     assert heartbeat.last_seen_at is not None
 
 
-def test_a_failing_job_stays_pending_and_is_retried(
-    clean_db, detector_source, monkeypatch
-) -> None:
+def test_a_failing_job_stays_pending_and_is_retried(clean_db, detector_source, monkeypatch) -> None:
     from sentinel.common.clock import utcnow
 
     _persist_event(clean_db, detector_source, received_at=utcnow())

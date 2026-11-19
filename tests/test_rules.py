@@ -10,7 +10,6 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
-
 from sentinel.detector.rules import (
     RuleDefinition,
     default_rules,
@@ -198,9 +197,7 @@ def test_high_request_volume_one_below_and_exact_threshold() -> None:
 def test_no_new_alert_while_the_count_stays_above_the_threshold() -> None:
     rule = rule_by_key("failed_login_burst")
     start = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
-    events = _events(
-        rule.threshold + 2, start=start, event_type="login_failed", status_code=401
-    )
+    events = _events(rule.threshold + 2, start=start, event_type="login_failed", status_code=401)
     # The trigger at index threshold-1 crosses; the next event does not.
     crossing = evaluate_rule(rule, events, events[rule.threshold - 1])
     later = evaluate_rule(rule, events, events[rule.threshold])

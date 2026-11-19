@@ -4,16 +4,14 @@ from __future__ import annotations
 
 import uuid
 from collections.abc import Iterator
-from contextlib import contextmanager
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
-
 from sentinel.common.db import get_db
 from sentinel.common.models import ApiSource, DetectorJob, SecurityEvent, Workspace
 from sentinel.core.app import create_app as create_core_app
 from sentinel.ingest.app import create_app as create_ingest_app
+from sqlalchemy import select
 
 
 @pytest.fixture
@@ -64,7 +62,9 @@ def _payload(**overrides) -> dict:
     return payload
 
 
-def test_ingest_accepts_a_valid_event(ingest_client: TestClient, source: ApiSource, clean_db) -> None:
+def test_ingest_accepts_a_valid_event(
+    ingest_client: TestClient, source: ApiSource, clean_db
+) -> None:
     response = ingest_client.post(
         "/ingest/v1/events",
         json=_payload(),
@@ -130,9 +130,7 @@ def test_same_event_id_with_different_content_returns_409(
     assert conflict.status_code == 409
 
 
-def test_invalid_payloads_are_rejected(
-    ingest_client: TestClient, source: ApiSource
-) -> None:
+def test_invalid_payloads_are_rejected(ingest_client: TestClient, source: ApiSource) -> None:
     cases = [
         _payload(event_type="exploit_attempt"),
         _payload(method="TRACE"),
