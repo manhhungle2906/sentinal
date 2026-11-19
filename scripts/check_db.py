@@ -54,14 +54,19 @@ def main(argv: list[str]) -> int:
         return 1
 
     try:
-        with psycopg.connect(raw.replace("postgresql+psycopg://", "postgresql://"), connect_timeout=20) as connection:
-            with connection.cursor() as cursor:
-                cursor.execute("select version()")
-                row = cursor.fetchone()
+        with (
+            psycopg.connect(
+                raw.replace("postgresql+psycopg://", "postgresql://"), connect_timeout=20
+            ) as connection,
+            connection.cursor() as cursor,
+        ):
+            cursor.execute("select version()")
+            row = cursor.fetchone()
         print("RESULT  : connected")
         print(f"server  : {str(row[0]).split(',')[0]}")
         return 0
-    except Exception as error:  # noqa: BLE001 - the script reports every failure
+    except Exception as error:
+        # The script reports every failure, so a broad catch is intentional.
         print(f"RESULT  : FAILED - {type(error).__name__}")
         print(f"detail  : {str(error)[:600]}")
         return 1
