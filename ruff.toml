@@ -1,0 +1,25 @@
+# Ruff configuration for the whole repository.
+# The package metadata lives in backend/pyproject.toml; this file only
+# describes the lint and format rules for every Python source in the tree.
+
+line-length = 100
+target-version = "py312"
+
+exclude = [
+    ".venv",
+    "backend/.venv",
+    "node_modules",
+    "frontend",
+    "playwright-report",
+    "test-results",
+    # An applied migration is never rewritten; only new revisions are added.
+    "backend/alembic/versions",
+]
+
+[lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "C4", "RUF"]
+ignore = ["B008", "RUF012"]
+
+[lint.per-file-ignores]
+"backend/alembic/versions/*" = ["E501"]
+"scripts/*" = ["E402", "UP036"]
