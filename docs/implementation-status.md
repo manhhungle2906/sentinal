@@ -17,14 +17,14 @@ command, the observed evidence and the next action.
 | Docker daemon | Was down at session start; started later in the session → `docker info` → `29.9.3` |
 | Host Python | `python3 --version` → `3.9.6` (too old for the project) |
 | Project Python | Installed `uv` 0.13.9 + CPython 3.12.16 via `uv python install 3.12`; venv at `backend/.venv` |
-| Node | Not installed on the host — the frontend toolchain runs in Docker |
-| Database | PostgreSQL 16 in Docker (`postgres:16-alpine`), dev instance `sentinel-pg-dev` on `127.0.0.1:5432` |
+| Node | Not installed on the host — the frontend toolchain runs in Docker (`node:22-alpine`) |
+| Database | PostgreSQL 16 in Docker (`postgres:16-alpine`), dev instance `sentinel-pg-dev` on `127.0.0.1:5432`, test database `sentinel_test` |
 
 ---
 
 ## Milestone 1 — Baseline
 
-**PASS** `backend/.venv/bin/python -m ruff format --check .` → `29 files left unchanged`
+**PASS** `backend/.venv/bin/python -m ruff format --check .` → `All checks passed!`
 **PASS** `backend/.venv/bin/python -m ruff check .` → `All checks passed!`
 
 Backend skeleton created:
@@ -106,31 +106,188 @@ parameter and falls back to the header.
 **FAIL → FIXED** `POST /api/auth/logout` returned an empty 200 instead of 204.
 Fix: the response status is set explicitly to 204.
 
-**PASS** `pytest ../tests/` → **56 passed**
-
 ---
 
 ## Milestone 4 — Collaboration and dashboards
 
-**NOT RUN** Two-member collaboration, assignment, comments and history are
-implemented in the Core API but the browser-level (Playwright) verification and the
-dedicated two-member API test are still to be written.
+**PASS** `pytest ../tests/test_investigation.py` → 5 passed
+Two members investigate the same alert: assignment, comments, the status flow
+(`new → investigating → resolved`), the terminal-status lock, the role rules
+(a viewer cannot comment, change a status or be assigned) and the non-member
+404 on the alert, the events and the dashboard.
+
+**PASS** `pytest ../tests/` → **61 passed**
 
 ---
 
 ## Milestone 5 — Release verification
 
-**NOT RUN** Frontend build, Playwright browser tests, Compose startup from an empty
-database, `scripts/smoke.py`, `scripts/verify.py`, `scripts/demo.py`, the demo API,
-CI configuration and the cloud deployment guide are still to be delivered.
+**PASS** Frontend production build.
+`docker run --rm -v "$PWD":/app -w /app node:22-alpine npm run build`
+→ `✓ built in 5.65s`, `dist/assets/index-*.css 13.44 kB`, `dist/assets/index-*.js 667.22 kB`.
+
+**FAIL → FIXED** the first build failed with
+`[@tailwindcss/vite:generate:build] Cannot convert undefined or null to object`.
+Root cause: the Tailwind v4 Vite plugin is not compatible with the pinned Vite 6
+and the native oxide binary was missing from `node_modules`.
+Fix (decided with the project owner): the frontend moved to **Tailwind CSS 3.4.17
+with PostCSS 8 + Autoprefixer**. `frontend/tailwind.config.js` and
+`frontend/postcss.config.js` were added, `@tailwindcss/vite` was removed from
+`vite.config.ts` and `index.css` now uses the `@tailwind base/components/utilities`
+directives. Rerun outcome: the build succeeds.
+
+**PASS** `npm run lint` → 0 errors, 0 warnings
+**PASS** `npx tsc -b --pretty` → no type errors
+**PASS** `npm test` → 6 passed (2 files)
+
+**PASS** `docker compose --profile demo config --quiet` → exit 0
+
+**PASS** `docker compose --profile demo up --build --wait --wait-timeout 180`
+→ all services healthy; `migrate` exited 0.
+
+**FAIL → FIXED** the `demo` container was reported `unhealthy`.
+Root cause: the health check used `wget`, which the `python:3.12-slim` base image
+does not provide. Fix: the health check now uses the Python standard library
+(`urllib.request`), the same way the other services do.
+
+**FAIL → FIXED** the `detector` health check probed an HTTP endpoint that the
+worker does not serve (it is a background worker without an HTTP server).
+Root cause: the health check was copied from the API services. Fix: a new
+`backend/sentinel/detector/healthcheck.py` reads the heartbeat row from
+PostgreSQL and exits 0 when it is under 60 seconds old.
+
+**PASS** `python3 scripts/smoke.py` → 8 checks passed
+(browser URL, proxy health routes, direct Core and Ingest health, fresh detector
+heartbeat).
+
+**PASS** `backend/.venv/bin/python scripts/demo.py --scenario all`
+→ 242 synthetic event records submitted; the three rule types raised an alert.
+Observed alerts:
+
+| Rule | Source IP | Count / threshold | Severity | Evidence |
+|---|---|---|---|---|
+| `repeated_access_denial` | `203.0.113.13` | 10 / 10 | medium | 10 |
+| `high_request_volume` | `203.0.113.12` | 101 / 101 | medium | 101 |
+| `failed_login_burst` | `203.0.113.11` | 5 / 5 | high | 5 |
+
+The under-threshold control and the normal activity produced **no** alert.
+
+**FAIL → FIXED** the demo seeding aborted with
+`the ingestion endpoint rejected a scenario event: 409`.
+Root cause: the demo event ids are deterministic, but the payload carried
+`occurred_at = now()`, so a repeated run produced the same event id with a
+different body and the ingestion API correctly answered `409` (same id, different
+content). Fix: `demo/scenarios.py` now uses the fixed base moment
+`2026-01-01T00:00:00Z`, so the payload is byte-identical between runs and a
+repeat run is an identical retry. Rerun outcome: the seeding command completed
+twice in a row with 242 records and no error, and no duplicate alerts appeared.
+
+**PASS** a genuine Demo API request traverses ingestion:
+`GET /api/events?route_template=GET%20%2Fproducts` returned one event with
+source IP `203.0.113.10` and source label `Demo API`.
+
+**FAIL → FIXED** the demo account email `demo-owner@sentinel.local` was rejected
+with 422 (`special-use or reserved name`).
+Root cause: `email-validator` rejects the `.local` TLD by default. Fix: the demo
+and E2E accounts use the `example.com` domain, which is reserved for
+documentation.
+
+**FAIL → FIXED** `scripts/demo.py` aborted with `ImportError: cannot import name
+'UTC' from 'datetime'` on the macOS system Python 3.9.
+Root cause: the orchestration scripts are standard-library only, but the demo
+scenarios use `datetime.UTC`, which needs Python 3.11+. Fix: `scripts/_common.py`
+gained `require_python_312()`, which restarts the script with a 3.12+
+interpreter (the project venv, a versioned interpreter or the Windows `py`
+launcher).
+
+### Browser walkthrough (Playwright)
+
+**FAIL → FIXED** the browser test `the three detection rules raise alerts with
+evidence` timed out waiting for the `high_request_volume` row, although the
+alert existed in PostgreSQL (`count_at_trigger = 101 / 101`).
+Root cause: the Alerts page loaded the list once when it mounted and never
+refreshed it, so a row created by the asynchronous detector never reached the
+DOM. Fix: the Alerts page now polls every 15 seconds and the E2E helpers
+(`expectAlertRow`, `expectAlertRowText`) re-read the list through the Refresh
+button until the row appears.
+
+**FAIL → FIXED** the browser test `two members investigate an alert together and
+the history persists` failed with `403 Forbidden` on
+`PATCH /api/alerts/{id}/assignee`, so the assignee stayed empty.
+Root cause: the reverse proxy forwarded `Host $host`, which drops the port, so
+the API compared the browser origin `http://web:8080` with the host `web` and
+rejected the request as cross-origin. Fix: `frontend/nginx.conf` now forwards
+`$http_host`, and `require_same_origin` in `backend/sentinel/core/deps.py`
+compares host and port separately so a proxy that drops the port does not break
+the check while a different host or a different port is still rejected. Three
+regression tests were added to `tests/test_core_api.py`.
+
+**PASS** Playwright browser walkthrough → **6 passed**
+
+| Test | Result |
+|---|---|
+| registration, workspace and source setup | passed |
+| an ordinary ingested event appears in the event explorer | passed |
+| event filters narrow the result set | passed |
+| the three detection rules raise alerts with evidence | passed |
+| two members investigate an alert together and the history persists | passed |
+| a signed-in non-member cannot reach the workspace data | passed |
+
+### Full verification gate
+
+**FAIL → FIXED** `python3 scripts/verify.py --suite all` reported
+`FAIL ruff check (exit 1)` on `backend/alembic/env.py`.
+Root cause: the import block was not sorted the way Ruff expects. Fix: the import
+order was corrected with `ruff check --fix`. Rerun outcome: all steps passed.
+
+**PASS** `python3 scripts/verify.py --suite all` → **all steps passed**
+(isolated Compose project `sentinel-verify-*`, empty test database, dynamically
+allocated host ports, resources removed afterwards):
+
+```
+PASS  ruff format --check (exit 0)
+PASS  ruff check (exit 0)
+PASS  pytest (unit + PostgreSQL integration) (exit 0)
+PASS  frontend install (exit 0)
+PASS  frontend lint (exit 0)
+PASS  frontend typecheck (exit 0)
+PASS  frontend unit tests (exit 0)
+PASS  frontend production build (exit 0)
+PASS  compose up (the stack is healthy)
+PASS  smoke check (exit 0)
+PASS  playwright browser checks (exit 0)
+all steps passed
+```
+
+**NOT RUN** The cloud deployment has not been performed. `docs/deployment.md`
+describes the release shape, but no live URL exists. The project owner has
+authorized a live deployment; it is the next step.
 
 ---
 
 ## Next actions
 
-1. Write the two-member collaboration API test (assignment, comment, history, non-member 404).
-2. Build the React frontend (login, overview, event explorer, alerts, alert detail).
-3. Write the demo API and the synthetic scenario generator.
-4. Write `scripts/smoke.py`, `scripts/verify.py` and `scripts/demo.py`.
-5. Run the full Compose stack and the Playwright browser walkthrough.
-6. Finish `README.md`, `docs/architecture.md`, `docs/deployment.md` and `.github/workflows/ci.yml`.
+1. Commit the milestones in focused commits.
+2. Deploy to a real environment (authorized by the project owner) and record the
+   live URL, the environment variables and the smoke-check output.
+3. Re-run `python3 scripts/verify.py --suite all` after the deployment wiring
+   changes.
+
+---
+
+## Deliverables checklist
+
+| Deliverable | Location | State |
+|---|---|---|
+| Backend API (core, ingest, detector) | `backend/sentinel/` | Done |
+| Database migrations | `backend/alembic/` | Done, one owner |
+| Frontend SPA | `frontend/src/` | Done |
+| Browser tests | `frontend/e2e/` | Done, 6/6 passed |
+| Demo API and fixtures | `demo/` | Done, rerunnable |
+| Orchestration scripts | `scripts/` | Done |
+| Docker Compose stack | `compose.yaml` | Done, verified healthy |
+| Architecture document | `docs/architecture.md` | Done |
+| Deployment guide | `docs/deployment.md` | Done |
+| README | `README.md` | Done |
+| CI | `.github/workflows/ci.yml` | Done, not yet executed on a runner |
+| Cloud deployment | — | Not performed |
