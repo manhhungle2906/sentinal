@@ -291,9 +291,9 @@ deploy/         The combined image used by the free-tier cloud deployment
 
 ## Cloud deployment
 
-The release is deployed to **Render** with a managed PostgreSQL 16 database
-(Neon). `render.yaml` is the Blueprint and `deploy/` holds the combined image
-that the free tier needs.
+The release is **live** at **https://sentinel-web-ryxl.onrender.com**. It runs
+on **Render** with a managed PostgreSQL 16 database (Neon). `render.yaml` is
+the Blueprint and `deploy/` holds the combined image that the free tier needs.
 
 ```sh
 # 1. Push the repository to GitHub
@@ -304,9 +304,13 @@ git push -u origin main
 
 # 3. Verify the live deployment
 python3 scripts/smoke.py \
-  --base-url https://<service>.onrender.com \
-  --core-url https://<service>.onrender.com \
-  --ingest-url https://<service>.onrender.com
+  --base-url https://sentinel-web-ryxl.onrender.com \
+  --core-url https://sentinel-web-ryxl.onrender.com \
+  --ingest-url https://sentinel-web-ryxl.onrender.com
+
+# 4. Verify the whole product flow against the live deployment
+backend/.venv/bin/python scripts/live_check.py \
+  --base-url https://sentinel-web-ryxl.onrender.com
 ```
 
 The step-by-step guide, the environment variables and the free-tier

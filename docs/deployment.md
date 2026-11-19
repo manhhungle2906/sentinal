@@ -5,17 +5,19 @@ covers HTTPS, the environment variables, a managed PostgreSQL instance, the
 migrations, the health checks and the smoke check after the rollout.
 
 > The application has been verified locally (Docker Compose, PostgreSQL 16,
-> the full Playwright walkthrough). A live deployment is only claimed after an
-> authorized deployment and a verification of the live URL. Do not treat this
-> document as evidence that a deployment happened.
+> the full Playwright walkthrough) **and** live on Render. The live release
+> is `https://sentinel-web-ryxl.onrender.com`; the verification output is
+> recorded in [implementation-status.md](implementation-status.md#milestone-6--cloud-deployment-render-free-tier--neon).
 
 ---
 
 ## 0. Render (the deployment used for this release)
 
-This is the concrete, verified path. Render's free tier has no background
-worker, no private services and no one-off jobs, so the four runtimes share a
-single web-service container as four separate OS processes:
+This is the concrete, verified path. The live service is
+**https://sentinel-web-ryxl.onrender.com**. Render's free tier has no
+background worker, no private services and no one-off jobs, so the four
+runtimes share a single web-service container as four separate OS
+processes:
 
 | Process | Role | Port inside the container |
 |---|---|---|
@@ -56,6 +58,24 @@ Use [Neon](https://neon.tech) (free, no expiry) or a Render Postgres instance.
 3. Convert the driver to the SQLAlchemy psycopg driver:
    `postgresql+psycopg://USER:PASSWORD@HOST/DATABASE?sslmode=require`.
    The application reads `SENTINEL_DATABASE_URL`.
+4. Verify the string before deploying it. The script never prints the
+   password:
+
+   ```sh
+   backend/.venv/bin/python scripts/check_db.py \
+     "postgresql+psycopg://USER:PASSWORD@HOST/DATABASE?sslmode=require"
+   ```
+
+   The expected output is `RESULT  : connected`.
+
+> **IPv6 note.** Neon publishes an IPv4 **and** an IPv6 address for the
+> pooled endpoint. A runtime without an IPv6 route (the Render free tier, for
+> example) resolves the hostname to the IPv6 address and fails with
+> `Network is unreachable`. The application resolves the hostname at start-up
+> and pins the IPv4 address for libpq (`hostaddr`), while the hostname is
+> still sent as `host` so TLS SNI and the certificate verification keep
+> working. The same applies to the Alembic migration in
+> `backend/alembic/env.py`.
 
 ### 0.3 Deploy
 
@@ -76,13 +96,23 @@ Use [Neon](https://neon.tech) (free, no expiry) or a Render Postgres instance.
 
 ```sh
 python3 scripts/smoke.py \
-  --base-url https://sentinel-web.onrender.com \
-  --core-url https://sentinel-web.onrender.com \
-  --ingest-url https://sentinel-web.onrender.com
+  --base-url https://sentinel-web-ryxl.onrender.com \
+  --core-url https://sentinel-web-ryxl.onrender.com \
+  --ingest-url https://sentinel-web-ryxl.onrender.com
 ```
 
 The script verifies the browser URL, the Core and Ingest health paths and the
 freshness of the detector heartbeat. It exits non-zero when a check fails.
+
+A second script exercises the whole product flow over the public HTTP
+surface: it registers an account, creates a workspace and a source, submits
+synthetic events through the ingestion endpoint and waits for the detector to
+raise the alert.
+
+```sh
+backend/.venv/bin/python scripts/live_check.py \
+  --base-url https://sentinel-web-ryxl.onrender.com
+```
 
 Then open the site, create the first account through the sign-up form and
 check the Overview page.

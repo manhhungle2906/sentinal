@@ -311,13 +311,42 @@ ERROR:  password authentication failed for user 'neondb_owner'
 
 The IPv6 problem is gone; the remaining error is the credential.
 
-**FAIL** The deploy still fails because `SENTINEL_DATABASE_URL` holds a wrong
-password for the Neon role. Neon does not show the password again, so it has
-to be reset in the Neon console and copied into the Render environment.
+**PASS** The deploy succeeded after the Neon credential was corrected. The
+service URL is `https://sentinel-web-ryxl.onrender.com`.
 
-**BLOCKED** The live verification (`scripts/smoke.py` against the live URL)
-cannot run until the Neon credential is correct. The service URL is
-`https://sentinel-web-ryxl.onrender.com`.
+**PASS** `scripts/smoke.py` against the live URL:
+
+```
+PASS  browser url: status 200
+PASS  proxy /health/live: status 200
+PASS  proxy /health/ready: status 200 (database: ok)
+PASS  core /health/live: status 200
+PASS  core /health/ready: status 200
+PASS  ingest /health/live: status 200
+PASS  ingest /health/ready: status 200
+PASS  detector heartbeat: {"status": "ok", "service": "detector"}
+smoke check passed
+```
+
+**PASS** `scripts/live_check.py` against the live URL (added for this
+release). It exercises the public HTTP surface only:
+
+```
+PASS  health/ready
+PASS  register (201)
+PASS  session (200)
+PASS  workspace
+PASS  source (201)
+PASS  ingestion key shown once
+PASS  ingestion accepted (six events, all 202)
+PASS  event list (200)
+PASS  failed_login_burst alert raised
+all live checks passed
+```
+
+The detector raised the `failed_login_burst` alert on the live deployment,
+so the ingestion path, the job queue, the rule engine and the alert read
+API all work against the managed PostgreSQL instance.
 
 **PASS** `scripts/check_db.py` was added to verify a connection string
 without printing the password:
@@ -330,17 +359,17 @@ backend/.venv/bin/python scripts/check_db.py "postgresql+psycopg://user:password
 `ruff` and `pytest` without installing the project, so it failed with a
 missing module instead of a real result. The job now installs `backend[dev]`
 and provides a PostgreSQL service, so the gate covers the integration tests.
+The pipeline is green on the runner:
+<https://github.com/manhhungle2906/sentinal/actions/runs/44507587620>
 
 ---
 
 ## Next actions
 
-1. Reset the Neon password for `neondb_owner` and update
-   `SENTINEL_DATABASE_URL` in the Render environment.
-2. Re-run `python3 scripts/smoke.py` against the live URL and record the
-   result here.
-3. Create the first account through the sign-up form and confirm the
-   Overview page renders real data.
+1. Keep the Neon password only in the Render environment. Rotate it
+   periodically and re-run `scripts/live_check.py` afterwards.
+2. Replace the synthetic live-check account with a real one and walk the
+   documented demo path in the browser.
 
 ---
 
@@ -359,4 +388,4 @@ and provides a PostgreSQL service, so the gate covers the integration tests.
 | Deployment guide | `docs/deployment.md` | Done |
 | README | `README.md` | Done |
 | CI | `.github/workflows/ci.yml` | Done, green on the runner (5/5 jobs) |
-| Cloud deployment | `render.yaml`, `deploy/` | Started, blocked on the Neon credential |
+| Cloud deployment | `render.yaml`, `deploy/` | Live at https://sentinel-web-ryxl.onrender.com |
