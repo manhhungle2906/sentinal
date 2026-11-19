@@ -6,7 +6,6 @@ import uuid
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response, status
-from pydantic import IPvAnyAddress
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -21,7 +20,18 @@ from sentinel.common.security import token_digest
 
 router = APIRouter(tags=["ingest"])
 
-_ingest_limiter = SlidingWindowRateLimiter(limit=600, window_seconds=60)
+
+def _build_ingest_limiter() -> SlidingWindowRateLimiter:
+    """Build the per-source ingestion limiter for the configured limit.
+
+    The limit is read from the environment so an isolated demo environment can
+    raise it without changing the production default.
+    """
+    limit = get_settings().ingestion_rate_limit_per_minute
+    return SlidingWindowRateLimiter(limit=limit, window_seconds=60)
+
+
+_ingest_limiter = _build_ingest_limiter()
 
 
 def authenticate_source(db: Session, raw_key: str | None) -> ApiSource:

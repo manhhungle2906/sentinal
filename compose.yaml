@@ -55,6 +55,9 @@ services:
       start_period: 15s
     expose:
       - "8000"
+    ports:
+      # Loopback only: the direct Core port is for local tooling (smoke script).
+      - "127.0.0.1:${CORE_PORT:-8000}:8000"
 
   ingest:
     build:
@@ -64,6 +67,9 @@ services:
     environment:
       SENTINEL_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-sentinel}:${POSTGRES_PASSWORD:-sentinel}@db:5432/${POSTGRES_DB:-sentinel}
       SENTINEL_APP_ENV: ${APP_ENV:-development}
+      # The isolated demo submits synthetic bursts, so the ingestion limit is
+      # raised for the demo profile only.
+      SENTINEL_INGESTION_RATE_LIMIT_PER_MINUTE: ${INGESTION_RATE_LIMIT_PER_MINUTE:-600}
     depends_on:
       db:
         condition: service_healthy
@@ -77,6 +83,9 @@ services:
       start_period: 15s
     expose:
       - "8000"
+    ports:
+      # Loopback only: the direct Ingest port is for local tooling (smoke script).
+      - "127.0.0.1:${INGEST_PORT:-8001}:8000"
 
   detector:
     build:
@@ -92,9 +101,9 @@ services:
       migrate:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health/live').status==200 else 1)"]
+      test: ["CMD", "python", "-m", "sentinel.detector.healthcheck"]
       interval: 15s
-      timeout: 5s
+      timeout: 10s
       retries: 10
       start_period: 20s
     expose:
@@ -138,7 +147,7 @@ services:
     ports:
       - "127.0.0.1:${DEMO_PORT:-9000}:9000"
     healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9000/health/live"]
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:9000/health/live').status==200 else 1)"]
       interval: 10s
       timeout: 5s
       retries: 10
