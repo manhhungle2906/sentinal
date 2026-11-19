@@ -93,8 +93,30 @@ def require_csrf(request: Request, settings: Settings = Depends(get_settings)) -
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="invalid CSRF token")
 
 
+def _host_port(value: str) -> tuple[str, str | None]:
+    """Split ``host[:port]`` into a lower-cased host and an optional port."""
+    value = value.strip().lower()
+    if value.startswith("["):
+        # IPv6 literal, for example [::1]:8080
+        closing = value.find("]")
+        if closing != -1:
+            host = value[: closing + 1]
+            rest = value[closing + 1 :]
+            port = rest[1:] if rest.startswith(":") else None
+            return host, port
+    if ":" in value:
+        host, _, port = value.partition(":")
+        return host, port or None
+    return value, None
+
+
 def require_same_origin(request: Request) -> None:
-    """Reject state-changing requests that do not come from the app origin."""
+    """Reject state-changing requests that do not come from the app origin.
+
+    The comparison ignores the default port difference so that a proxy which
+    forwards the host without the port still passes. The origin and the host
+    must otherwise match exactly.
+    """
     if request.method in SAFE_METHODS:
         return
     origin = request.headers.get("origin")
@@ -103,7 +125,17 @@ def require_same_origin(request: Request) -> None:
         # applies, so this is not a security hole.
         return
     host = request.headers.get("host")
-    if host and origin.split("://")[-1] != host:
+    if not host:
+        return
+
+    origin_value = origin.split("://", 1)[-1]
+    origin_host, origin_port = _host_port(origin_value)
+    request_host, request_port = _host_port(host)
+    if origin_host != request_host:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="cross-origin request rejected"
+        )
+    if origin_port and request_port and origin_port != request_port:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, detail="cross-origin request rejected"
         )
@@ -151,9 +183,7 @@ def workspace_dependency(
     ) -> WorkspaceContext:
         # The workspace id comes from the path when the route has one,
         # otherwise from the X-Workspace-Id header.
-        raw = request.path_params.get("workspace_id") or request.headers.get(
-            "x-workspace-id"
-        )
+        raw = request.path_params.get("workspace_id") or request.headers.get("x-workspace-id")
         if not raw:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST, detail="X-Workspace-Id header required"

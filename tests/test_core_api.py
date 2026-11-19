@@ -7,7 +7,6 @@ from contextlib import contextmanager
 
 import pytest
 from fastapi.testclient import TestClient
-
 from sentinel.common.db import get_db
 from sentinel.core.app import create_app
 
@@ -41,7 +40,9 @@ def _client_for(session) -> Iterator[TestClient]:
         yield test_client
 
 
-def _register(client: TestClient, email: str = "owner@example.com", password: str = "correct-horse-battery"):
+def _register(
+    client: TestClient, email: str = "owner@example.com", password: str = "correct-horse-battery"
+):
     response = client.post(
         "/api/auth/register",
         json={"email": email, "password": password, "display_name": "Owner"},
@@ -78,7 +79,11 @@ def test_register_rejects_a_duplicate_email(client: TestClient) -> None:
     _register(client)
     response = client.post(
         "/api/auth/register",
-        json={"email": "owner@example.com", "password": "correct-horse-battery", "display_name": "Again"},
+        json={
+            "email": "owner@example.com",
+            "password": "correct-horse-battery",
+            "display_name": "Again",
+        },
     )
     assert response.status_code == 409
 
@@ -119,6 +124,54 @@ def test_state_change_without_a_csrf_token_is_rejected(client: TestClient) -> No
     client.cookies.delete("sentinel_csrf")
     response = client.post("/api/workspaces", json={"name": "No CSRF"})
     assert response.status_code == 403
+
+
+def test_state_change_from_another_origin_is_rejected(client: TestClient) -> None:
+    _register(client)
+    response = client.post(
+        "/api/workspaces",
+        json={"name": "Cross origin"},
+        headers={
+            "X-CSRF-Token": _csrf(client),
+            "Origin": "http://evil.example.com",
+        },
+    )
+    assert response.status_code == 403
+    assert "cross-origin" in response.json()["detail"]
+
+
+def test_state_change_from_the_same_origin_with_a_different_port_is_rejected(
+    client: TestClient,
+) -> None:
+    _register(client)
+    response = client.post(
+        "/api/workspaces",
+        json={"name": "Other port"},
+        headers={
+            "X-CSRF-Token": _csrf(client),
+            "Origin": "http://testserver:9999",
+            "Host": "testserver:8080",
+        },
+    )
+    assert response.status_code == 403
+
+
+def test_state_change_is_accepted_when_the_proxy_forwards_the_host_without_a_port(
+    client: TestClient,
+) -> None:
+    """A reverse proxy that drops the port must not break the same-origin check.
+
+    The browser sends ``Origin: http://web:8080`` while a proxy that forwards
+    ``Host: web`` reaches the API. The host still matches, so the request is
+    allowed; a different host is still rejected.
+    """
+    _register(client)
+    response = client.post(
+        "/api/workspaces",
+        json={"name": "Proxied"},
+        headers={"X-CSRF-Token": _csrf(client), "Origin": "http://web:8080", "Host": "web"},
+    )
+    assert response.status_code == 201, response.text
 
 
 # ---------------------------------------------------------------------------
