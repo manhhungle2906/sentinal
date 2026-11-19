@@ -1,0 +1,58 @@
+# API Sentinel — Render Blueprint (free tier)
+#
+# The Render free tier has no background worker, no private services and no
+# one-off jobs, so the four runtimes (the Core API, the Ingestion API, the
+# detection worker and the nginx proxy that serves the SPA) share a single
+# web-service container. They stay four separate OS processes with their own
+# entry points; only the packaging is combined.
+#
+# The Docker Compose stack in `compose.yaml` keeps them in separate
+# containers and remains the reference deployment shape.
+#
+# The database is a managed PostgreSQL 16 instance. The free option is
+# Neon (https://neon.tech), which does not expire; set DATABASE_URL to the
+# pooled connection string that Neon provides.
+#
+# Deploy with: New → Blueprint → point at this repository and this file.
+
+services:
+  - type: web
+    name: sentinel-web
+    runtime: docker
+    plan: free
+    dockerfilePath: ./deploy/Dockerfile.render
+    dockerContext: .
+    healthCheckPath: /healthz
+    envVars:
+      # The pooled Neon connection string. The value is entered in the
+      # Render dashboard (it is never stored in this file).
+      - key: SENTINEL_DATABASE_URL
+        sync: false
+      # A long random value. Generate one with:
+      #   python3 -c "import secrets; print(secrets.token_urlsafe(48))"
+      - key: SENTINEL_SECRET_KEY
+        sync: false
+      - key: SENTINEL_APP_ENV
+        value: production
+      - key: SENTINEL_SECURE_COOKIES
+        value: "true"
+      - key: SENTINEL_DEMO_MODE
+        value: "false"
+      - key: SENTINEL_LOGIN_RATE_LIMIT_PER_MINUTE
+        value: "10"
+      - key: SENTINEL_INGESTION_RATE_LIMIT_PER_MINUTE
+        value: "600"
+      - key: SENTINEL_DETECTOR_POLL_INTERVAL_SECONDS
+        value: "1.0"
+      - key: SENTINEL_DETECTOR_MAX_ATTEMPTS
+        value: "5"
+      # The two API services listen on the loopback interface inside the
+      # container, so nginx can reach them without a public route.
+      - key: CORE_PORT
+        value: "8000"
+      - key: INGEST_PORT
+        value: "8001"
+      - key: CORE_UPSTREAM
+        value: http://127.0.0.1:8000
+      - key: INGEST_UPSTREAM
+        value: http://127.0.0.1:8001

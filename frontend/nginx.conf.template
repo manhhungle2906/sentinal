@@ -1,13 +1,15 @@
-upstream sentinel_core {
-    server core:8000;
-}
-
-upstream sentinel_ingest {
-    server ingest:8000;
-}
+# The nginx configuration is rendered at container start from this template.
+#
+# The placeholders use the __NAME__ form so the native nginx variables
+# ($host, $remote_addr, $scheme, ...) keep their meaning and no template
+# engine is needed to substitute them.
+#
+# __PORT__            — the port the server listens on
+# __CORE_UPSTREAM__   — the base URL of the Core API
+# __INGEST_UPSTREAM__ — the base URL of the Ingestion API
 
 server {
-    listen 8080;
+    listen __PORT__;
     server_name _;
 
     root /usr/share/nginx/html;
@@ -17,7 +19,7 @@ server {
 
     # Proxy the approved Core API routes under the same browser origin.
     location /api/ {
-        proxy_pass http://sentinel_core;
+        proxy_pass __CORE_UPSTREAM__;
         proxy_http_version 1.1;
         # $http_host keeps the port so the same-origin check in the Core API
         # can compare the browser origin with the request host exactly.
@@ -25,23 +27,29 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_ssl_server_name on;
+        proxy_ssl_name $proxy_host;
         proxy_read_timeout 30s;
     }
 
     location /health/ {
-        proxy_pass http://sentinel_core;
+        proxy_pass __CORE_UPSTREAM__;
         proxy_set_header Host $http_host;
+        proxy_ssl_server_name on;
+        proxy_ssl_name $proxy_host;
     }
 
     # The ingestion endpoint is exposed on the same origin but requires the
     # source credential; it is never reachable without one.
     location /ingest/ {
-        proxy_pass http://sentinel_ingest;
+        proxy_pass __INGEST_UPSTREAM__;
         proxy_http_version 1.1;
         proxy_set_header Host $http_host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_read_timeout 30s;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_ssl_server_name on;
+        proxy_ssl_name $proxy_host;
     }
 
     location = /healthz {
