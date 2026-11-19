@@ -265,13 +265,82 @@ authorized a live deployment; it is the next step.
 
 ---
 
+## Milestone 6 — Cloud deployment (Render free tier + Neon)
+
+**PASS** `git push -u origin main` → the repository
+`git@github.com:manhhungle2906/sentinal.git` received the `main` branch
+(15 commits at the time of writing).
+
+**PASS** The GitHub Actions pipeline ran on the runner:
+<https://github.com/manhhungle2906/sentinal/actions/runs/44507587620>
+
+```
+PASS  Compose validation
+PASS  Browser checks
+PASS  Frontend checks
+PASS  Backend checks
+PASS  Full verification gate
+```
+
+**FAIL** The first live deploy (`264d7d5`) exited with status 1 during the
+migration. Evidence from the Render log:
+
+```
+sqlalchemy.exc.OperationalError: (psycopg.OperationalError) connection is bad:
+connection to server at "2600:1f16:555:9621:c1fd:73cf:753e:5e0", port 5432
+failed: Network is unreachable
+```
+
+Root cause: Neon publishes an IPv4 **and** an IPv6 address for the pooled
+endpoint. The Render free tier has no IPv6 route, so the hostname resolved to
+the IPv6 address and the connection failed.
+
+Fix: `backend/sentinel/common/db.py` resolves the hostname once at start-up
+and passes the IPv4 address to libpq as `hostaddr`, while the hostname is
+still sent as `host` so TLS SNI and the certificate verification keep
+working. `backend/alembic/env.py` applies the same arguments. Nine
+regression tests cover the helper (`tests/test_db.py`).
+
+**PASS** After the fix (`23c74b6`) the container reaches Neon over IPv4.
+The Render log now shows:
+
+```
+connection to server at "3.14.138.241", port 5432 failed:
+ERROR:  password authentication failed for user 'neondb_owner'
+```
+
+The IPv6 problem is gone; the remaining error is the credential.
+
+**FAIL** The deploy still fails because `SENTINEL_DATABASE_URL` holds a wrong
+password for the Neon role. Neon does not show the password again, so it has
+to be reset in the Neon console and copied into the Render environment.
+
+**BLOCKED** The live verification (`scripts/smoke.py` against the live URL)
+cannot run until the Neon credential is correct. The service URL is
+`https://sentinel-web-ryxl.onrender.com`.
+
+**PASS** `scripts/check_db.py` was added to verify a connection string
+without printing the password:
+
+```sh
+backend/.venv/bin/python scripts/check_db.py "postgresql+psycopg://user:password@host/db?sslmode=require"
+```
+
+**PASS** The CI pipeline was repaired. The "Full verification gate" job ran
+`ruff` and `pytest` without installing the project, so it failed with a
+missing module instead of a real result. The job now installs `backend[dev]`
+and provides a PostgreSQL service, so the gate covers the integration tests.
+
+---
+
 ## Next actions
 
-1. Commit the milestones in focused commits.
-2. Deploy to a real environment (authorized by the project owner) and record the
-   live URL, the environment variables and the smoke-check output.
-3. Re-run `python3 scripts/verify.py --suite all` after the deployment wiring
-   changes.
+1. Reset the Neon password for `neondb_owner` and update
+   `SENTINEL_DATABASE_URL` in the Render environment.
+2. Re-run `python3 scripts/smoke.py` against the live URL and record the
+   result here.
+3. Create the first account through the sign-up form and confirm the
+   Overview page renders real data.
 
 ---
 
@@ -289,5 +358,5 @@ authorized a live deployment; it is the next step.
 | Architecture document | `docs/architecture.md` | Done |
 | Deployment guide | `docs/deployment.md` | Done |
 | README | `README.md` | Done |
-| CI | `.github/workflows/ci.yml` | Done, not yet executed on a runner |
-| Cloud deployment | — | Not performed |
+| CI | `.github/workflows/ci.yml` | Done, green on the runner (5/5 jobs) |
+| Cloud deployment | `render.yaml`, `deploy/` | Started, blocked on the Neon credential |
