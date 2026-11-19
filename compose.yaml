@@ -1,0 +1,148 @@
+name: sentinel
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-sentinel}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sentinel}
+      POSTGRES_DB: ${POSTGRES_DB:-sentinel}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sentinel} -d ${POSTGRES_DB:-sentinel}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    # Not published to the host: only the internal Compose network reaches it.
+    expose:
+      - "5432"
+
+  migrate:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      SENTINEL_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-sentinel}:${POSTGRES_PASSWORD:-sentinel}@db:5432/${POSTGRES_DB:-sentinel}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  core:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: ["uvicorn", "sentinel.core.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      SENTINEL_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-sentinel}:${POSTGRES_PASSWORD:-sentinel}@db:5432/${POSTGRES_DB:-sentinel}
+      SENTINEL_APP_ENV: ${APP_ENV:-development}
+      SENTINEL_SECRET_KEY: ${SECRET_KEY:-dev-only-secret-key-change-me}
+      SENTINEL_SECURE_COOKIES: ${SECURE_COOKIES:-false}
+      SENTINEL_DEMO_MODE: ${DEMO_MODE:-true}
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health/live').status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    expose:
+      - "8000"
+
+  ingest:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: ["uvicorn", "sentinel.ingest.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      SENTINEL_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-sentinel}:${POSTGRES_PASSWORD:-sentinel}@db:5432/${POSTGRES_DB:-sentinel}
+      SENTINEL_APP_ENV: ${APP_ENV:-development}
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health/live').status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    expose:
+      - "8000"
+
+  detector:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: ["python", "-m", "sentinel.detector.worker"]
+    environment:
+      SENTINEL_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-sentinel}:${POSTGRES_PASSWORD:-sentinel}@db:5432/${POSTGRES_DB:-sentinel}
+      SENTINEL_APP_ENV: ${APP_ENV:-development}
+    depends_on:
+      db:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health/live').status==200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    expose:
+      - "8000"
+
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    environment:
+      CORE_URL: http://core:8000
+      INGEST_URL: http://ingest:8000
+      PORT: "8080"
+    depends_on:
+      core:
+        condition: service_healthy
+      ingest:
+        condition: service_healthy
+    ports:
+      # Bound to loopback only: the developer-facing proxy is not public.
+      - "127.0.0.1:${WEB_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  demo:
+    profiles: ["demo"]
+    build:
+      context: ./demo
+      dockerfile: Dockerfile
+    environment:
+      SENTINEL_INGEST_URL: http://ingest:8000/ingest/v1/events
+      SENTINEL_SOURCE_KEY: ${DEMO_SOURCE_KEY:-}
+      SENTINEL_DEMO_MODE: "true"
+    depends_on:
+      ingest:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${DEMO_PORT:-9000}:9000"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9000/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  pgdata:
