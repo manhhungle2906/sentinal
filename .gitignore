@@ -17,3 +17,14 @@ build/
 .idea/
 test-results/
 playwright-report/
+
+# The frontend sources are TypeScript. A stray compiled .js copy of a .ts or
+# .tsx file makes Vite resolve the copy first, and makes Playwright and
+# Vitest run the same test twice with a shared fixture.
+frontend/src/**/*.js
+frontend/src/**/*.jsx
+frontend/e2e/*.js
+frontend/e2e/*.jsx
+frontend/vite.config.js
+frontend/vitest.config.js
+frontend/playwright.config.js

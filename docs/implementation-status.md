@@ -362,6 +362,211 @@ and provides a PostgreSQL service, so the gate covers the integration tests.
 The pipeline is green on the runner:
 <https://github.com/manhhungle2906/sentinal/actions/runs/44507587620>
 
+**PASS** Interactive product walkthrough on the live deployment (2026-11-19).
+`scripts/seed_live.py` was added to prepare the scenario; the browser steps
+were driven against `https://sentinel-web-ryxl.onrender.com`.
+
+```
+PASS  register demo@apisentinel.dev (201)
+PASS  workspace "Demo Workspace"
+PASS  three sources created (Demo API, Login Gateway, Partner API)
+PASS  ordinary traffic persisted and listed in the event explorer
+PASS  failed_login_burst   count 5/5   window 120s  severity high
+PASS  high_request_volume  count 101/101 window 60s  severity medium
+PASS  repeated_access_denial count 10/10 window 300s severity medium
+PASS  alert detail shows the rule condition, the frozen count, the interval
+      and the linked evidence rows
+PASS  status new -> investigating -> resolved recorded with the actor
+PASS  assignment to a workspace owner persisted
+PASS  comment persisted and visible after reload
+PASS  a second session (analyst@apisentinel.dev, role analyst) saw the same
+      alert, commented and moved it to investigating
+PASS  outsider@apisentinel.dev received 404 for alerts, alert detail,
+      comments, sources and events
+PASS  anonymous requests received 401
+```
+
+The evidence in the browser matched the rows stored in PostgreSQL: the alert
+count, the threshold, the window and the interval boundaries are the ones the
+detector recorded at trigger time.
+
+**FAIL** `scripts/seed_live.py` did not raise `high_request_volume` on the
+first attempt. Evidence: the script submitted 104 events sequentially and
+the alert never appeared, while the count in PostgreSQL showed only 68 events
+inside the 60 second window. Root cause: the rule counts the *server receipt
+timestamps*, so 104 sequential HTTP round trips spread over roughly two
+minutes and never reach 101 events inside one minute. Fix: the scenario is
+now submitted with a bounded thread pool so the events land inside the
+window. The script keeps the sequential submission for the two-minute and
+five-minute windows, where the spread does not matter.
+
+**PASS** The threshold semantics were then verified on the live deployment
+with a **fresh source IP for every measurement**, so the suppression window
+could not influence the result.
+
+```
+110 events submitted in parallel from 198.51.100.199
+FRESH CROSSING OK: count=101/101 window=60s
+
+Under-threshold controls:
+  volume 100/101 -> no alert (correct)
+  login    4/5   -> no alert (correct)
+  denial   9/10  -> no alert (correct)
+```
+
+This is the strongest evidence that the rules compare a real threshold
+instead of raising an alert whenever an event exists.
+
+**PASS** `docs/presentation-guide.md` was written for the demonstration
+session. It contains the 60-second pitch, the problem and solution framing,
+the architecture explanation, the rule semantics, the data model, the
+security model, a 19-minute step-by-step demo script, a fallback plan for
+network failures, the verified evidence and twelve anticipated questions with
+answers.
+
+---
+
+## Milestone 7 — The two evaluation defects
+
+Two defects were reported against the development workflow. Both were fixed
+at the root cause, and each fix now has a regression check in the gate.
+
+### 7.1 The dev proxy rewrote the Host header
+
+**FAIL** Evidence: the browser sent the alert assignment, the Core API
+answered `403 cross-origin request rejected`.
+
+Root cause: `frontend/vite.config.ts` set `changeOrigin: true` on the
+`/api` and `/ingest` proxies. That option rewrites the `Host` header to the
+upstream host, so the Core same-origin check compared the browser `Origin`
+against the upstream host and rejected the request. The CSRF check and the
+same-origin check were both correct; the proxy was lying about the origin.
+
+Fix: keep the browser Host header.
+
+```ts
+proxy: {
+  // Keep the browser Host header. changeOrigin rewrites it to the
+  // upstream host, so the Core same-origin check rejects assignment and
+  // every other state-changing request as cross-origin.
+  "/api": { target: CORE_TARGET, changeOrigin: false },
+  "/ingest": { target: INGEST_TARGET, changeOrigin: false },
+},
+```
+
+Neither the CSRF check nor the same-origin check was weakened or disabled.
+
+**PASS** The behaviour was measured against the real Core API with a real
+session, a real CSRF token and a real assignment request. The script is
+`frontend/scripts/check-proxy-host.mjs`.
+
+```
+changeOrigin: false  ->  404 {"detail":"alert not found"}      rejectedAsCrossOrigin: false
+changeOrigin: true   ->  403 {"detail":"cross-origin request rejected"}
+                        rejectedAsCrossOrigin: true
+```
+
+The `404` proves the request passed both the CSRF check and the same-origin
+check and reached the alert lookup. The `403` is the reported failure.
+
+**PASS** The check is part of the verification gate as `dev proxy origin
+check`, and `frontend/src/vite-proxy.test.ts` guards the configuration value.
+
+### 7.2 The typecheck script forced an invalid compiler flag
+
+**FAIL** Evidence: `npm run typecheck` reported
+
+```
+tsconfig.app.json:9:35 - error TS5096: Option 'allowImportingTsExtensions'
+can only be used when either 'noEmit' or 'emitDeclarationOnly' is set.
+tsconfig.node.json:8:35 - error TS5096: ...
+```
+
+Root cause: the script passed `--noEmit false --emitDeclarationOnly false`,
+which turned both guards off, while the project configurations set
+`allowImportingTsExtensions` and rely on `noEmit: true`.
+
+Fix: use the same command as the CI pipeline, which reads the project
+configuration as written.
+
+```json
+"typecheck": "tsc -b --pretty"
+```
+
+Both commands were run to confirm the difference:
+
+```
+npx tsc -b --noEmit false --emitDeclarationOnly false --pretty  ->  2 errors, exit 1
+npm run typecheck  (tsc -b --pretty)                            ->  exit 0
+```
+
+### 7.3 A stray compiled copy of the frontend
+
+**FAIL** Evidence: the browser suite ran twelve tests instead of six, and
+`the three detection rules raise alerts with evidence` failed while the
+identical `.js` copy passed.
+
+Root cause: twenty-three untracked `.js` files sat next to the TypeScript
+sources. They were compiled copies of the `.ts` and `.tsx` files. Playwright
+picked up both `app.spec.ts` and `app.spec.js`, so the two suites shared the
+same fixture account: the first suite rotated the ingestion key, the second
+suite reused the account with the stale key, ingested nothing, and its
+`signIn` helper timed out waiting for the Overview link.
+
+Fix: the compiled copies were removed, and `.gitignore` now excludes them so
+they cannot come back unnoticed.
+
+```
+frontend/src/**/*.js
+frontend/src/**/*.jsx
+frontend/e2e/*.js
+frontend/e2e/*.jsx
+frontend/vite.config.js
+frontend/vitest.config.js
+frontend/playwright.config.js
+```
+
+The three legitimate JavaScript configuration files, `eslint.config.js`,
+`postcss.config.js` and `tailwind.config.js`, are tracked and were kept.
+
+**PASS** The browser suite runs the six intended scenarios again.
+
+```
+✓ registration, workspace and source setup
+✓ an ordinary ingested event appears in the event explorer
+✓ event filters narrow the result set
+✓ the three detection rules raise alerts with evidence
+✓ two members investigate an alert together and the history persists
+✓ a signed-in non-member cannot reach the workspace data
+6 passed
+```
+
+### 7.4 The gate after the fixes
+
+**PASS** `python3 scripts/verify.py --suite all`
+
+```
+PASS  ruff format --check (exit 0)
+PASS  ruff check (exit 0)
+PASS  pytest (unit tests only) (exit 0)
+PASS  frontend install (exit 0)
+PASS  frontend lint (exit 0)
+PASS  frontend typecheck (exit 0)
+PASS  frontend unit tests (exit 0)
+PASS  frontend production build (exit 0)
+PASS  compose up (the stack is healthy)
+PASS  smoke check (exit 0)
+PASS  dev proxy origin check (exit 0)
+PASS  playwright browser checks (exit 0)
+all steps passed
+```
+
+**PASS** `pytest` against a PostgreSQL 16 instance: 73 passed.
+
+**PASS** `npm run typecheck`, `npm run lint` and `npx vitest run` inside the
+Node 22 container: 8 unit tests passed, including the new proxy
+configuration test.
+
 ---
 
 ## Next actions
@@ -389,3 +594,4 @@ The pipeline is green on the runner:
 | README | `README.md` | Done |
 | CI | `.github/workflows/ci.yml` | Done, green on the runner (5/5 jobs) |
 | Cloud deployment | `render.yaml`, `deploy/` | Live at https://sentinel-web-ryxl.onrender.com |
+| Presentation guide | `docs/presentation-guide.md` | Done, includes the verified demo script |

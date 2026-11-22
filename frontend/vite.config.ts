@@ -9,8 +9,11 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      "/api": { target: CORE_TARGET, changeOrigin: true },
-      "/ingest": { target: INGEST_TARGET, changeOrigin: true },
+      // Keep the browser Host header. changeOrigin rewrites it to the
+      // upstream host, so the Core same-origin check rejects assignment and
+      // every other state-changing request as cross-origin.
+      "/api": { target: CORE_TARGET, changeOrigin: false },
+      "/ingest": { target: INGEST_TARGET, changeOrigin: false },
     },
   },
   preview: {

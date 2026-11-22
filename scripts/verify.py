@@ -189,7 +189,7 @@ def frontend_steps(runner: Runner, node_command: list[str]) -> None:
     runner.step("frontend lint", _docker_node_command(["npm run lint"]), timeout=600)
     runner.step(
         "frontend typecheck",
-        _docker_node_command(["npx tsc -b --pretty"]),
+        _docker_node_command(["npm run typecheck"]),
         timeout=600,
     )
     runner.step("frontend unit tests", _docker_node_command(["npm test"]), timeout=600)
@@ -274,12 +274,52 @@ def smoke_step(runner: Runner, stack: Stack) -> bool:
     )
 
 
+def dev_proxy_steps(runner: Runner, stack: Stack) -> None:
+    """Check that the Vite dev proxy keeps the browser Host header.
+
+    The Core API rejects a state-changing request whose Host header does not
+    match the browser Origin. Vite rewrites that header when `changeOrigin`
+    is enabled, which makes every assignment and comment fail behind the dev
+    server with `403 cross-origin request rejected`.
+    """
+    script = FRONTEND_DIR / "scripts" / "check-proxy-host.mjs"
+    if not script.exists():
+        runner._record("dev proxy origin check", False, "frontend/scripts is missing")
+        return
+
+    command = [
+        "docker",
+        "run",
+        "--rm",
+        "--network",
+        f"{stack.project}_default",
+        "-v",
+        f"{FRONTEND_DIR}:/app",
+        "-w",
+        "/app",
+        "-e",
+        "HOME=/tmp",
+        "-e",
+        "CORE_TARGET=http://core:8000",
+        "-e",
+        "INGEST_TARGET=http://ingest:8000",
+        NODE_IMAGE,
+        "sh",
+        "-c",
+        "npm ci --no-audit --no-fund || npm install --no-audit --no-fund; "
+        "node scripts/check-proxy-host.mjs",
+    ]
+    runner.step("dev proxy origin check", command, timeout=900)
+
+
 def e2e_steps(runner: Runner, stack: Stack) -> None:
     """Run the Playwright browser checks against the isolated stack."""
     playwright_dir = FRONTEND_DIR / "e2e"
     if not playwright_dir.exists():
         runner._record("playwright configuration", False, "frontend/e2e is missing")
         return
+
+    dev_proxy_steps(runner, stack)
 
     command = [
         "docker",
