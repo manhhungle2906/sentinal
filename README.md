@@ -93,6 +93,22 @@ docker compose --profile demo down
 
 The PostgreSQL volume is retained, so your local data survives a restart.
 
+### Frontend development server
+
+The Vite dev server proxies `/api` and `/ingest` to the running Core and
+Ingestion APIs.
+
+```sh
+cd frontend
+CORE_TARGET=http://localhost:8000 INGEST_TARGET=http://localhost:8001 npm run dev
+```
+
+The proxy **keeps the browser `Host` header**. The Core API compares that
+header with the browser `Origin` on every state-changing request, and a
+proxy that rewrites `Host` makes assignments, comments and status changes
+fail with `403 cross-origin request rejected`. Do not set `changeOrigin: true`
+in `frontend/vite.config.ts`; `frontend/src/vite-proxy.test.ts` guards it.
+
 ---
 
 ## Seed the demo data
@@ -169,6 +185,32 @@ flows through ingestion and shows up in the Event Explorer.
 `scripts/verify.py --suite all` uses an isolated Compose project, an empty
 test database and dynamically allocated host ports, and removes only the
 resources it created. It never touches your own volumes.
+
+The gate runs twelve steps:
+
+```
+PASS  ruff format --check
+PASS  ruff check
+PASS  pytest (unit + PostgreSQL integration)
+PASS  frontend install
+PASS  frontend lint
+PASS  frontend typecheck
+PASS  frontend unit tests
+PASS  frontend production build
+PASS  compose up (the stack is healthy)
+PASS  smoke check
+PASS  dev proxy origin check
+PASS  playwright browser checks
+```
+
+The `dev proxy origin check` drives the Vite dev server in front of the real
+Core API and asserts that a state-changing request is not rejected as
+cross-origin. It runs the same script as `frontend/scripts/check-proxy-host.mjs`.
+
+The frontend sources are TypeScript. A compiled `.js` copy of a `.ts` or
+`.tsx` file makes Vite resolve the copy first and makes Playwright and
+Vitest run the same test twice with a shared fixture, so `.gitignore`
+excludes those copies.
 
 ---
 
@@ -283,6 +325,7 @@ deploy/         The combined image used by the free-tier cloud deployment
 
 | Document | Content |
 |---|---|
+| [docs/presentation-guide.md](docs/presentation-guide.md) | **Hướng dẫn trình bày và demo sản phẩm** cho giảng viên: pitch, kịch bản từng bước, bằng chứng và hỏi đáp dự kiến |
 | [docs/architecture.md](docs/architecture.md) | Services, data model, rule semantics, configuration, data handling |
 | [docs/deployment.md](docs/deployment.md) | HTTPS, environment variables, managed database, migrations, health and smoke checks |
 | [docs/implementation-status.md](docs/implementation-status.md) | Milestones and the actual result of every verification command |
